@@ -18,7 +18,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: python
         run: |
-          import hashlib, json, pathlib, urllib.request
+          import hashlib, json, pathlib, urllib.request, urllib.error
           files = [
             (679139938, "LocalConnect-Windows-x64-Setup-0.2.1.exe", "7bc98e295f10fc46cc2abb9ae8c7e7641f7b10da5b81407d6986da7cfd1bebfe"),
             (679139939, "LocalConnect-Linux-x64-0.2.1.tar.gz", "ab105696be666e9b6d87da73ef2041b2066d6c75695f77515cc42e1f86548cec"),
@@ -27,12 +27,22 @@ jobs:
           out = pathlib.Path("packages")
           out.mkdir()
           sums = []
+          existing = {}
+          try:
+              with urllib.request.urlopen("https://api.github.com/repos/TakbirZaman/LocalConnect-Downloads/releases/tags/v0.2.1-beta.2", timeout=60) as response:
+                  existing = {item["name"]: item for item in json.load(response)["assets"]}
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
           for asset, name, expected in files:
               # One-time import of existing public, hash-pinned release assets.
               url = f"https://api.github.com/repositories/1416828215/releases/assets/{asset}"
               req = urllib.request.Request(url, headers={"Accept":"application/vnd.github+json","User-Agent":"LocalConnect-publisher"})
-              with urllib.request.urlopen(req, timeout=60) as response:
-                  metadata = json.load(response)
+              if name in existing:
+                  metadata = existing[name]
+              else:
+                  with urllib.request.urlopen(req, timeout=60) as response:
+                      metadata = json.load(response)
               req = urllib.request.Request(metadata["browser_download_url"], headers={"User-Agent":"LocalConnect-publisher"})
               digest = hashlib.sha256()
               with urllib.request.urlopen(req, timeout=120) as response, (out/name).open("wb") as target:
