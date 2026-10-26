@@ -1,0 +1,69 @@
+name: Publish verified installers
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/publish.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: publish-installers
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download and verify packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import hashlib, json, pathlib, urllib.request
+          files = [
+            (679139938, "LocalConnect-Windows-x64-Setup-0.2.1.exe", "7bc98e295f10fc46cc2abb9ae8c7e7641f7b10da5b81407d6986da7cfd1bebfe"),
+            (679139939, "LocalConnect-Linux-x64-0.2.1.tar.gz", "ab105696be666e9b6d87da73ef2041b2066d6c75695f77515cc42e1f86548cec"),
+            (679139934, "LocalConnect-Android-arm64-Signed-0.2.0.apk", "94afe2f0dec74709f3b8ff7410b520772b83b57cbbc39415737051e6b46087a9"),
+          ]
+          out = pathlib.Path("packages")
+          out.mkdir()
+          sums = []
+          for asset, name, expected in files:
+              # One-time import of existing public, hash-pinned release assets.
+              url = f"https://api.github.com/repositories/1416828215/releases/assets/{asset}"
+              req = urllib.request.Request(url, headers={"Accept":"application/vnd.github+json","User-Agent":"LocalConnect-publisher"})
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  metadata = json.load(response)
+              req = urllib.request.Request(metadata["browser_download_url"], headers={"User-Agent":"LocalConnect-publisher"})
+              digest = hashlib.sha256()
+              with urllib.request.urlopen(req, timeout=120) as response, (out/name).open("wb") as target:
+                  while chunk := response.read(1024*1024):
+                      digest.update(chunk)
+                      target.write(chunk)
+              if digest.hexdigest() != expected:
+                  raise SystemExit(f"Integrity verification failed: {name}")
+              sums.append(f"{expected}  {name}\n")
+              print(f"Verified {name}")
+          (out/"SHA256SUMS.txt").write_text("".join(sums))
+      - name: Publish downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cat > notes.txt <<'EOF'
+          LocalConnect beta for Windows, Linux and Android.
+
+          Windows: x64 installer 0.2.1. Install once, then launch from Start. Publisher signing is not configured.
+          Linux: x64 archive 0.2.1, built on Ubuntu 24.04. Extract and run ./LocalConnect/localconnect. Compatible GTK 3/runtime libraries are required.
+          Android: ARM64 release-signed APK 0.2.0. Android 8 or newer.
+
+          Connect both devices to the same local network. Remote control requires approval on the controlled device. Screen streaming currently uses PNG at up to 4 fps and one desktop display.
+          These are beta packages. Google approval is not established.
+          Verify downloads using SHA256SUMS.txt.
+          EOF
+          if gh release view v0.2.1-beta.2 >/dev/null 2>&1; then
+            mkdir existing
+            gh release download v0.2.1-beta.2 --dir existing
+            for file in packages/*; do cmp "$file" "existing/$(basename "$file")"; done
+          else
+            gh release create v0.2.1-beta.2 packages/* --title "LocalConnect — Windows, Linux and Android beta" --notes-file notes.txt --prerelease --target "$GITHUB_SHA"
+          fi
